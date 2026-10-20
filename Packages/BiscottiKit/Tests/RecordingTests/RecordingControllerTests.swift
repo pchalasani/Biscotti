@@ -266,6 +266,27 @@ struct RecordingStartStopTests {
         #expect(result == nil)
     }
 
+    @Test("Concurrent stops finalize once and return the meeting ID once")
+    @MainActor
+    func concurrentStopsReturnMeetingIDOnce() async throws {
+        // Regression: stop() awaited the engine and store before resetting
+        // state, so a second stop (double-clicked Stop, hotkey + button)
+        // passed the isRecording guard and returned the same meeting ID.
+        // AppCore then enqueued two transcriptions for one meeting.
+        let fix = try makeFixture()
+        defer { fix.cleanup() }
+
+        await fix.controller.start()
+        let meetingID = fix.controller.state.meetingID
+
+        async let first = fix.controller.stop()
+        async let second = fix.controller.stop()
+        let results = await [first, second]
+
+        #expect(try results.compactMap(\.self) == [#require(meetingID)])
+        #expect(fix.controller.state == .idle)
+    }
+
     @Test("Stop clears state to idle")
     @MainActor
     func stopClearsState() async throws {

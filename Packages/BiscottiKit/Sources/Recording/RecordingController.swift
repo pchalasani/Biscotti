@@ -44,6 +44,10 @@ public final class RecordingController {
     private var stateStreamTask: Task<Void, Never>?
     private var denialCheckTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
+    /// Set while `stop()` is finalizing. `stop()` suspends (engine, store)
+    /// before resetting `state`, so without this a second concurrent call
+    /// would pass the `isRecording` guard and return the same meeting ID.
+    private var isStopping = false
 
     private static let logger = Logger(
         subsystem: "net.scosman.biscotti",
@@ -164,9 +168,13 @@ public final class RecordingController {
     /// Returns the meeting ID of the just-stopped recording, or `nil` if not recording.
     @discardableResult
     public func stop() async -> UUID? {
-        guard state.isRecording, let currentRecorder = recorder, let meetingID = state.meetingID else {
+        guard !isStopping, state.isRecording, let currentRecorder = recorder,
+              let meetingID = state.meetingID
+        else {
             return nil
         }
+        isStopping = true
+        defer { isStopping = false }
 
         // Stop the engine
         await currentRecorder.stop()
