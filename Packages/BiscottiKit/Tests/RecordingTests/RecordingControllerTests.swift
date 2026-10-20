@@ -266,7 +266,7 @@ struct RecordingStartStopTests {
         #expect(result == nil)
     }
 
-    @Test("Concurrent stops finalize once and return the meeting ID once")
+    @Test("Concurrent stops finalize once, return the ID once, and all wait for finalization")
     @MainActor
     func concurrentStopsReturnMeetingIDOnce() async throws {
         // Regression: stop() awaited the engine and store before resetting
@@ -279,12 +279,25 @@ struct RecordingStartStopTests {
         await fix.controller.start()
         let meetingID = fix.controller.state.meetingID
 
-        async let first = fix.controller.stop()
-        async let second = fix.controller.stop()
-        let results = await [first, second]
+        // Each caller records whether finalization had finished by the time
+        // its own stop() returned. The quit handler relies on this: it awaits
+        // stopRecording() before letting the app terminate, so a stop() that
+        // returns early would let the app quit mid-save (lost notes/duration).
+        let controller = fix.controller
+        let first = Task { @MainActor in
+            let id = await controller.stop()
+            return (id, controller.state == .idle)
+        }
+        let second = Task { @MainActor in
+            let id = await controller.stop()
+            return (id, controller.state == .idle)
+        }
+        let results = await [first.value, second.value]
 
-        #expect(try results.compactMap(\.self) == [#require(meetingID)])
-        #expect(fix.controller.state == .idle)
+        let expectedID = try #require(meetingID)
+        #expect(results.compactMap(\.0) == [expectedID])
+        let allWaited = results.allSatisfy(\.1)
+        #expect(allWaited, "every stop() must return only after finalization")
     }
 
     @Test("Stop clears state to idle")
